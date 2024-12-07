@@ -21,7 +21,26 @@ if not (os.path.exists(HTML_PATH) and os.path.isfile(HTML_PATH)):
     with open(HTML_PATH, "w") as f:
         f.write(htmlcontent)
 
-class Canvas:
+class StringProcesser:
+    def __new__(cls):
+        raise NotImplementedError("This class is not instantiable")
+    
+    @staticmethod
+    def replaceEscape(s: str) -> str:
+        return (
+            s
+            .replace("\\", "\\\\")
+            .replace("'", "\\'")
+            .replace("\"", "\\\"")
+            .replace("`", "\\`")
+            .replace("\n", "\\n")
+        )
+    
+    @staticmethod
+    def replaceString2CodeEval(s: str) -> str:
+        return f"\"{StringProcesser.replaceEscape(s)}\""
+
+class WebWindow:
     def __init__(
         self,
         width: int, height: int,
@@ -40,6 +59,7 @@ class Canvas:
         self.jsapi = jsapi.JsApi()
         self._destroy_event = threading.Event()
         self._jscodes: list[str] = []
+        self._waitting_jscodes: bool = False
         
         self.web: webview.Window = webview.create_window(
             title = title,
@@ -55,7 +75,6 @@ class Canvas:
             **(webkwargs or {})
         )
         
-        winlength = len(webview.windows)
         with _dpd_threadckeck.Bypasser():
             threading.Thread(target=webview.start, kwargs={"debug": debug}, daemon=True).start()
         
@@ -77,7 +96,50 @@ class Canvas:
         self.fserver = http.server.HTTPServer(("localhost", self.fserver_port), self.fserver_hander)
         threading.Thread(target=self.fserver.serve_forever, daemon=True).start()
         
-        while winlength != len(webview.windows):
-            time.sleep(1 / 60)
-        
+        self.web.evaluate_js("null;")
         webview.windows.remove(self.web)
+    
+    def getWidth(self) -> int:
+        return self.web.width
+    
+    def getHeight(self) -> int:
+        return self.web.height
+    
+    def getHwnd(self) -> int:
+        return self.hwnd
+    
+    def getTitle(self) -> str:
+        return self.web.title
+    
+    def getLegacyWindowWidth(self) -> int:
+        return self.web.evaluate_js("window.innerWidth;")
+    
+    def getLegacyWindowHeight(self) -> int:
+        return self.web.evaluate_js("window.innerHeight;")
+    
+    def desotroy(self) -> None:
+        self.web.destroy()
+    
+    def resize(self, w: int, h: int):
+        self.web.resize(w, h)
+    
+    def move(self, x: int, y: int):
+        self.web.move(x, y)
+    
+    def waitClose(self) -> None:
+        self._destroy_event.wait()
+        self.fserver.shutdown()
+        
+    def setWaitingState(self, state: bool) -> None:
+        self._waitting_jscodes = state
+        
+        if not state:
+            self.web.evaluate_js(f"{self._jscodes}.forEach(r2eval);")
+            self._jscodes.clear()
+    
+    def evaluate_js(self, js: str) -> typing.Any:
+        if self._waitting_jscodes:
+            self._jscodes.append(js)
+            return
+        return self.web.evaluate_js(js)
+    
