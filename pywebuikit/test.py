@@ -1,4 +1,4 @@
-from pywebuikit import canvas
+from pywebuikit import webwindow
 
-cv = canvas.WebWindow(800, 600, 100, 100, debug=True)
+cv = webwindow.WebWindow(800, 600, 100, 100, debug=True)
 cv.waitClose()

@@ -1,9 +1,9 @@
 from __future__ import annotations
 import http.server
 
-from .. import canvas
+from .. import webwindow
 
-def make_fsh(cv: canvas.Canvas):
+def make_fsh(cv: webwindow.WebWindow):
     class _FileServerHandler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200)

@@ -1,3 +1,3 @@
-from . import canvas
+from . import webwindow
 
 __version__ = 1
