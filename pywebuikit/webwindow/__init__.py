@@ -98,6 +98,15 @@ class WebWindow:
         
         self.web.evaluate_js("null;")
         webview.windows.remove(self.web)
+        
+        if not fullscreen:
+            webdpr = self.evaluate_js("window.devicePixelRatio;")
+            w_legacy, h_legacy = self.getLegacyWindowWidth(), self.getLegacyWindowHeight()
+            dw_legacy, dh_legacy = width - w_legacy, height - h_legacy
+            dw_legacy *= webdpr; dh_legacy *= webdpr
+            dw_legacy, dh_legacy = int(dw_legacy), int(dh_legacy)
+            self.resize(width + dw_legacy, height + dh_legacy)
+            self.move(int(x - dw_legacy / 2), int(y - dh_legacy / 2))
     
     def getWidth(self) -> int:
         return self.web.width
@@ -141,5 +150,5 @@ class WebWindow:
         if self._waitting_jscodes:
             self._jscodes.append(js)
             return
-        return self.web.evaluate_js(js)
+        return self.web.evaluate_js(f"r2eval({StringProcesser.replaceString2CodeEval(js)});")
     
