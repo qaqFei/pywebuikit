@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import typing
+import math
+import time
 from abc import abstractmethod
 from typing_extensions import overload
 
@@ -8,6 +10,7 @@ from .. import webwindow
 from .. import jscodes
 
 _TV_PWUIKJEA = typing.TypeVar("_TV_PWUIKJEA", covariant=True)
+_TV_RENDERITEM = typing.TypeVar("_TV_RENDERITEM", covariant=True)
 JS_UNDEFINED = type("JS_UNDEFINED", (), {
     "__bool__": lambda _: False,
     "__str__": lambda _: "undefined",
@@ -25,10 +28,26 @@ repetitionType = typing.Literal["repeat", "repeat-x", "repeat-y", "no-repeat"]
 class PyWebUIKitJsEvalable(typing.Protocol[_TV_PWUIKJEA]):
     @abstractmethod
     def __pywebuikit_jseval__(self) -> str: ...
+    
+@typing.runtime_checkable
+class RenderItem(typing.Protocol[_TV_RENDERITEM]):
+    @abstractmethod
+    def update(self, t: numtype) -> typing.Any: ...
+    
+    @abstractmethod
+    def itemType(self) -> str: ...
+    
+    @abstractmethod
+    def itemState(self) -> str: ...
+
+class Canvas2D_SaveState:
+    def __init__(self, ctx: Context2DRender): self.ctx = ctx
+    def __enter__(self): self.ctx.save()
+    def __exit__(self, *args): self.ctx.restore()
 
 class JavaScriptVariable:
-    def __init__(self, vn: str): self.vn = vn
-    def __pywebuikit_jseval__(self) -> str: return self.vn
+    def __init__(self, v: str): self.v = v
+    def __pywebuikit_jseval__(self) -> str: return self.v
     
 class Path2D(JavaScriptVariable): ...
 class ImageData(JavaScriptVariable): ...
@@ -39,12 +58,18 @@ class BaseRender:
     def __init__(self, window: webwindow.WebWindow):
         self.window = window
         self.ctxname = "ctx"
-    
-    def reg_drawMethod(self, prototype: str, name: str, jsfunc: str):
-        return self.window.evaluate_js(f"{prototype}.{name} = ({jsfunc});")
+        self.call_hooks: dict[str, typing.Callable[[tuple[evalable_type_aliases]], typing.Any]] = {}
     
     def call_method(self, method: str, *args: tuple[evalable_type_aliases]):
-        return self.window.evaluate_js(f"{self.ctxname}.{method}({",".join(self.format_args(args))});")
+        hook_do, hook_value = self.call_hooks[method](args) if method in self.call_hooks else (None, None)
+        code = f"{self.ctxname}.{method}({",".join(self.format_args(args))});"
+        
+        match hook_do:
+            case None: ...
+            case "cancel": return
+            case "change_code": code = hook_value(code)
+        
+        return self.window.evaluate_js(code)
     
     def format_args(self, args: evalable_type_aliases):
         for arg in args:
@@ -71,7 +96,7 @@ class BaseRender:
 
 class Context2DRender(BaseRender):
     def create_mainCanvas(self):
-        return self.window.evaluate_js(jscodes.CREATE_2DCANVAS)
+        return self.window.evaluate_js(jscodes.create_2DCanvas)
     
     def setAttribute(self, name: str, value: evalable_type_aliases):
         return self.window.evaluate_js(f"{self.ctxname}.{name} = ({next(iter(self.format_args([value])))});")
@@ -318,7 +343,186 @@ class Context2DRender(BaseRender):
     
     def translate(self, x: numtype, y: numtype):
         return self.call_method("translate", x, y)
+
+class Context2DRender_Extended(Context2DRender):
+    def __init__(self, window):
+        super().__init__(window)
+        
+        self.savestate = Canvas2D_SaveState(self)
+        self.window.evaluate_js(jscodes.c2d_extend)
     
+    def pos2size(self, x1: numtype, y1: numtype, x2: numtype, y2: numtype):
+        return (
+            min(x1, x2),
+            min(y1, y2),
+            abs(x1 - x2),
+            abs(y1 - y2)
+        )
+    
+    def clear(self):
+        return self.clearRect(0, 0, JavaScriptVariable(f"{self.ctxname}.canvas.width"), JavaScriptVariable(f"{self.ctxname}.canvas.height"))
+    
+    def rotateByDegrees(self, deg: numtype):
+        return self.rotate(deg * math.pi / 180)
+    
+    def drawLineEx(self, x1: numtype, y1: numtype, x2: numtype, y2: numtype, width: numtype, color: str):
+        with self.savestate:
+            self.setAttribute("strokeStyle", color)
+            self.setAttribute("lineWidth", width)
+            self.beginPath()
+            self.moveTo(x1, y1)
+            self.lineTo(x2, y2)
+            self.stroke()
+    
+    def drawImageCenter(self, image: WebJsImage, x: numtype, y: numtype, width: numtype, height: numtype):
+        return self.drawImage(image, x - width / 2, y - height / 2, width, height)
+    
+    def drawRotateImageCenter(self, image: WebJsImage, x: numtype, y: numtype, width: numtype, height: numtype, deg: numtype):
+        with self.savestate:
+            if deg != 0.0:
+                self.translate(x, y)
+                self.rotateByDegrees(deg)
+                return self.drawImage(image, -width / 2, -height / 2, width, height)
+            
+            return self.drawImage(image, x - width / 2, y - height / 2, width, height)
+    
+    def drawAlphaImage(self, image: WebJsImage, x: numtype, y: numtype, width: numtype, height: numtype, alpha: numtype):
+        with self.savestate:
+            self.setAttribute("globalAlpha", alpha)
+            return self.drawImage(image, x, y, width, height)
+    
+    def drawTextEx(self, text: str, x: numtype, y: numtype, font: str, color: str, baseLine: str, align: str):
+        with self.savestate:
+            self.setAttribute("fillStyle", color)
+            self.setAttribute("textAlign", align)
+            self.setAttribute("textBaseline", baseLine)
+            self.setAttribute("font", font)
+            self.fillText(text, x, y)
+    
+    def drawRotateText(self, text: str, x: numtype, y: numtype, deg: numtype, font: str, color: str):
+        with self.savestate:
+            self.translate(x, y)
+            self.rotateByDegrees(deg)
+            return self.drawTextEx(text, 0, 0, font, color, "middle", "center")
+    
+    def fillRectEx_BySize(self, x: numtype, y: numtype, width: numtype, height: numtype, color: str):
+        with self.savestate:
+            self.setAttribute("fillStyle", color)
+            return self.fillRect(x, y, width, height)
+    
+    def fillRectEx_ByPos(self, x1: numtype, y1: numtype, x2: numtype, y2: numtype, color: str):
+        x, y, width, height = self.pos2size(x1, y1, x2, y2)
+        return self.fillRectEx_BySize(x, y, width, height, color)
+    
+    def roundRectEx_BySize(self, x: numtype, y: numtype, width: numtype, height: numtype, r: numtype | list[numtype], color: str):
+        with self.savestate:
+            self.setAttribute("fillStyle", color)
+            self.beginPath()
+            self.roundRect(x, y, width, height, r)
+            self.fill()
+    
+    def roundRectEx_ByPos(self, x1: numtype, y1: numtype, x2: numtype, y2: numtype, r: numtype | list[numtype], color: str):
+        x, y, width, height = self.pos2size(x1, y1, x2, y2)
+        return self.roundRectEx_BySize(x, y, width, height, r, color)
+    
+    def diagonalRect_BySize(self, x: numtype, y: numtype, width: numtype, height: numtype, power: numtype):
+        self.moveTo(x + width * power, y)
+        self.lineTo(x + width, y)
+        self.lineTo(x + width - width * power, y + height)
+        self.lineTo(x, y + height)
+        self.lineTo(x + width * power, y)
+    
+    def diagonalRect_ByPos(self, x1: numtype, y1: numtype, x2: numtype, y2: numtype, power: numtype):
+        x, y, width, height = self.pos2size(x1, y1, x2, y2)
+        return self.diagonalRect_BySize(x, y, width, height, power)
+    
+    def clipDiagonalRect_BySize(self, x: numtype, y: numtype, width: numtype, height: numtype, power: numtype):
+        self.beginPath()
+        self.diagonalRect_BySize(x, y, width, height, power)
+        self.clip()
+    
+    def clipDiagonalRect_ByPos(self, x1: numtype, y1: numtype, x2: numtype, y2: numtype, power: numtype):
+        x, y, width, height = self.pos2size(x1, y1, x2, y2)
+        return self.clipDiagonalRect_BySize(x, y, width, height, power)
+    
+    def clipRect_BySize(self, x: numtype, y: numtype, width: numtype, height: numtype):
+        self.beginPath()
+        self.rect(x, y, width, height)
+        self.clip()
+
+    def clipRect_ByPos(self, x1: numtype, y1: numtype, x2: numtype, y2: numtype):
+        x, y, width, height = self.pos2size(x1, y1, x2, y2)
+        return self.clipRect_BySize(x, y, width, height)
+    
+    def drawDiagonalRect_BySize(self, x: numtype, y: numtype, width: numtype, height: numtype, power: numtype, color: str):
+        with self.savestate:
+            self.setAttribute("fillStyle", color)
+            self.beginPath()
+            self.diagonalRect_BySize(x, y, width, height, power)
+            self.fill()
+
+    def drawDiagonalRect_ByPos(self, x1: numtype, y1: numtype, x2: numtype, y2: numtype, power: numtype, color: str):
+        x, y, width, height = self.pos2size(x1, y1, x2, y2)
+        return self.drawDiagonalRect_BySize(x, y, width, height, power, color)
+
+    def drawTriangle(self, x1: numtype, y1: numtype, x2: numtype, y2: numtype, x3: numtype, y3: numtype, color: str):
+        with self.savestate:
+            self.setAttribute("fillStyle", color)
+            self.beginPath()
+            self.moveTo(x1, y1)
+            self.lineTo(x2, y2)
+            self.lineTo(x3, y3)
+            self.lineTo(x1, y1)
+            self.fill()
+    
+    def drawTriangleFrame(self, x1: numtype, y1: numtype, x2: numtype, y2: numtype, x3: numtype, y3: numtype, color: str, width: numtype):
+        with self.savestate:
+            self.setAttribute("strokeStyle", color)
+            self.setAttribute("lineWidth", width)
+            self.beginPath()
+            self.moveTo(x1, y1)
+            self.lineTo(x2, y2)
+            self.lineTo(x3, y3)
+            self.lineTo(x1, y1)
+            self.stroke()
+
+class Timer:
+    def __init__(self, max: numtype|None = None, maxdo: typing.Literal["tozero", "stop"] = "tozero"):
+        self.max = max
+        self.maxdo = maxdo
+        self.tozero()
+    
+    def tozero(self):
+        self.st = time.time()
+    
+    def now(self):
+        t = time.time() - self.st
+        
+        if self.max is not None and t > self.max:
+            match self.maxdo:
+                case "tozero":
+                    self.tozero()
+                case "stop":
+                    t = self.max
+                    
+        return t
+
+class Canvas2DRenderManager:
+    def __init__(self, render: Context2DRender_Extended, items: list[RenderItem]|None = None):
+        self.timer = Timer()
+        self.render = render
+        self.items: list[RenderItem] = [] if items is None else items.copy()
+    
+    def doRender(self):
+        t = self.timer.now()
+        
+        for item in self.items:
+            item.update(t)
+        
+        for item in self.items:
+            match item.itemType():
+                case _: pass
+
 evalable_type_aliases = (
     str
     | int
