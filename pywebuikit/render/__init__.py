@@ -38,7 +38,7 @@ class RenderItem(typing.Protocol[_TV_RENDERITEM]):
     def itemType(self) -> str: ...
     
     @abstractmethod
-    def itemState(self) -> str: ...
+    def itemState(self) -> dict[str, typing.Any]: ...
 
 class Canvas2D_SaveState:
     def __init__(self, ctx: Context2DRender): self.ctx = ctx
@@ -512,6 +512,7 @@ class Canvas2DRenderManager:
         self.timer = Timer()
         self.render = render
         self.items: list[RenderItem] = [] if items is None else items.copy()
+        self.renderMethods: dict[str, typing.Callable[[numtype, RenderItem], typing.Any]] = {}
     
     def doRender(self):
         t = self.timer.now()
@@ -520,8 +521,12 @@ class Canvas2DRenderManager:
             item.update(t)
         
         for item in self.items:
-            match item.itemType():
-                case _: pass
+            itype = item.itemType()
+            
+            if itype in self.renderMethods:
+                self.renderMethods[itype](t, item)
+            else:
+                raise ValueError(f"Unknown render item type: {itype}")
 
 evalable_type_aliases = (
     str
