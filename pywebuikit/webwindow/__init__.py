@@ -152,3 +152,20 @@ class WebWindow:
             return
         return self.web.evaluate_js(f"r2eval({StringProcesser.replaceString2CodeEval(js)});")
     
+    # def wait_jspromise(self, code: str) -> None:
+    #     eid = f"wait_jspromise_{random.randint(0, 2 << 31)}"
+    #     ete = threading.Event()
+    #     ecbname = f"{eid}_callback"
+    #     result = None
+        
+    #     def _callback(jsresult):
+    #         nonlocal result
+    #         result = jsresult
+    #         ete.set()
+            
+    #     self.jsapi.set_attr(ecbname, _callback)
+    #     self.evaluate_js(f"({code}).then((result) => pywebview.api.call_attr('{ecbname}', result));")
+    #     ete.wait()
+    #     delattr(self.jsapi, ecbname)
+    #     return result
+    

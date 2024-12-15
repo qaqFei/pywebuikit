@@ -3,16 +3,18 @@ from __future__ import annotations
 import typing
 import math
 import time
-from typing_extensions import overload
 from abc import abstractmethod
 
 from .. import webwindow
 from .. import jscodes
 from .. import jsbridge
+from .. import public_objects
+from ..render import render_items
+from .._real_overload import overload, OverloadMeta
 
 _TV_RENDERITEM = typing.TypeVar("_TV_RENDERITEM", covariant=True)
 
-numtype = int|float
+numtype = public_objects.numtype
 fillRuleType = typing.Literal["nonzero", "evenodd"]
 repetitionType = typing.Literal["repeat", "repeat-x", "repeat-y", "no-repeat"]
     
@@ -23,9 +25,6 @@ class RenderItem(typing.Protocol[_TV_RENDERITEM]):
     
     @abstractmethod
     def itemType(self) -> str: ...
-    
-    @abstractmethod
-    def itemState(self) -> dict[str, typing.Any]: ...
 
 class Canvas2D_SaveState:
     def __init__(self, ctx: Context2DRender): self.ctx = ctx
@@ -52,7 +51,7 @@ class BaseRender:
     def __pywebuikit_jseval__(self):
         return self.ctx.__pywebuikit_jseval__()
     
-class Context2DRender(BaseRender):
+class Context2DRender(BaseRender, metaclass=OverloadMeta):
     def create_mainCanvas(self):
         return self.window.evaluate_js(jscodes.create_2DCanvas)
     
@@ -120,7 +119,7 @@ class Context2DRender(BaseRender):
     def createLinearGradient(self, x0: numtype, y0: numtype, x1: numtype, y1: numtype):
         return self.call_method("createLinearGradient", x0, y0, x1, y1)
     
-    def createPattern(self, image: jsbridge.Image, repetition: repetitionType):
+    def createPattern(self, image: jsbridge.drawable_type, repetition: repetitionType):
         return self.call_method("createPattern", image, repetition)
     
     def createRadialGradient(self, x0: numtype, y0: numtype, r0: numtype, x1: numtype, y1: numtype, r1: numtype):
@@ -135,15 +134,15 @@ class Context2DRender(BaseRender):
         return self.call_method("drawFocusIfNeeded", element, path)
     
     @overload
-    def drawImage(self, image: jsbridge.Image, dx: numtype, dy: numtype):
+    def drawImage(self, image: jsbridge.drawable_type, dx: numtype, dy: numtype):
         return self.call_method("drawImage", image, dx, dy)
 
     @overload
-    def drawImage(self, image: jsbridge.Image, dx: numtype, dy: numtype, dWidth: numtype, dHeight: numtype):
+    def drawImage(self, image: jsbridge.drawable_type, dx: numtype, dy: numtype, dWidth: numtype, dHeight: numtype):
         return self.call_method("drawImage", image, dx, dy, dWidth, dHeight)
     
     @overload
-    def drawImage(self, image: jsbridge.Image, sx: numtype, sy: numtype, sWidth: numtype, sHeight: numtype, dx: numtype, dy: numtype, dWidth: numtype, dHeight: numtype):
+    def drawImage(self, image: jsbridge.drawable_type, sx: numtype, sy: numtype, sWidth: numtype, sHeight: numtype, dx: numtype, dy: numtype, dWidth: numtype, dHeight: numtype):
         return self.call_method("drawImage", image, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight)
     
     def ellipse(self, x: numtype, y: numtype, radiusX: numtype, radiusY: numtype, rotation: numtype, startAngle: numtype, endAngle: numtype, counterclockwise: bool = False):
@@ -336,10 +335,10 @@ class Context2DRender_Extended(Context2DRender):
             self.lineTo(x2, y2)
             self.stroke()
     
-    def drawImageCenter(self, image: jsbridge.Image, x: numtype, y: numtype, width: numtype, height: numtype):
+    def drawImageCenter(self, image: jsbridge.drawable_type, x: numtype, y: numtype, width: numtype, height: numtype):
         return self.drawImage(image, x - width / 2, y - height / 2, width, height)
     
-    def drawRotateImageCenter(self, image: jsbridge.Image, x: numtype, y: numtype, width: numtype, height: numtype, deg: numtype):
+    def drawRotateImageCenter(self, image: jsbridge.drawable_type, x: numtype, y: numtype, width: numtype, height: numtype, deg: numtype):
         with self.savestate:
             if deg != 0.0:
                 self.translate(x, y)
@@ -348,7 +347,7 @@ class Context2DRender_Extended(Context2DRender):
             
             return self.drawImage(image, x - width / 2, y - height / 2, width, height)
     
-    def drawAlphaImage(self, image: jsbridge.Image, x: numtype, y: numtype, width: numtype, height: numtype, alpha: numtype):
+    def drawAlphaImage(self, image: jsbridge.drawable_type, x: numtype, y: numtype, width: numtype, height: numtype, alpha: numtype):
         with self.savestate:
             self.setAttribute("globalAlpha", alpha)
             return self.drawImage(image, x, y, width, height)
@@ -470,14 +469,19 @@ class Timer:
         return t
 
 class Canvas2DRenderManager:
-    def __init__(self, render: Context2DRender_Extended, items: list[RenderItem]|None = None):
+    def __init__(self, canvas_render: Context2DRender_Extended, items: list[RenderItem]|None = None):
         self.timer = Timer()
-        self.render = render
+        self.canvas_render = canvas_render
         self.items: list[RenderItem] = [] if items is None else items.copy()
-        self.renderMethods: dict[str, typing.Callable[[numtype, RenderItem], typing.Any]] = {}
+        self.renderMethods: dict[str, typing.Callable[[
+            Context2DRender_Extended,
+            RenderItem,
+            float
+        ], typing.Any]] = {}
     
     def render(self):
         t = self.timer.now()
+        cvr = self.canvas_render
         
         for item in self.items:
             item.update(t)
@@ -485,7 +489,25 @@ class Canvas2DRenderManager:
         for item in self.items:
             itype = item.itemType()
             
-            if itype in self.renderMethods:
-                self.renderMethods[itype](t, item)
-            else:
-                raise ValueError(f"Unknown render item type: {itype}")
+            match itype:
+                case "builtin-rectangle":
+                    item: render_items.Rectangle
+                    
+                    with cvr.savestate:
+                        if item.is_fill:
+                            cvr.setAttribute("fillStyle", item.fillColor)
+                            endMethod = cvr.fill
+                        else:
+                            cvr.setAttribute("strokeStyle", item.strokeColor)
+                            cvr.setAttribute("lineWidth", item.strokeLineWidth)
+                            endMethod = cvr.stroke
+                        
+                        cvr.beginPath()
+                        cvr.rect(item.x, item.y, item.width, item.height)
+                        endMethod()
+                            
+                case _:
+                    if itype in self.renderMethods:
+                        self.renderMethods[itype](cvr, item, t)
+                    else:
+                        raise ValueError(f"Unknown render item type: {itype}")

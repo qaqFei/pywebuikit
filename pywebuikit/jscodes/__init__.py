@@ -28,7 +28,7 @@ window.addEventListener("resize", resizeCanvas);
 """
 
 c2d_extend = """\
-createCanvas2DHook('drawImage', (t, f, ...args) => {
-    if (t.globalAlpha != 0.0) return f(...args);
-});
+// createCanvas2DHook('drawImage', (t, f, ...args) => {
+//     if (t.globalAlpha != 0.0) return f(...args);
+// });
 """
