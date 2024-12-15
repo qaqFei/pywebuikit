@@ -3,31 +3,18 @@ from __future__ import annotations
 import typing
 import math
 import time
-from abc import abstractmethod
 from typing_extensions import overload
+from abc import abstractmethod
 
 from .. import webwindow
 from .. import jscodes
+from .. import jsbridge
 
-_TV_PWUIKJEA = typing.TypeVar("_TV_PWUIKJEA", covariant=True)
 _TV_RENDERITEM = typing.TypeVar("_TV_RENDERITEM", covariant=True)
-JS_UNDEFINED = type("JS_UNDEFINED", (), {
-    "__bool__": lambda _: False,
-    "__str__": lambda _: "undefined",
-    "__repr__": lambda _: "undefined",
-    "__pywebuikit_jseval__": lambda _: "undefined",
-    "__setattr__": lambda self, name, value: None,
-    "__delattr__": lambda self, name: None
-})()
 
 numtype = int|float
 fillRuleType = typing.Literal["nonzero", "evenodd"]
 repetitionType = typing.Literal["repeat", "repeat-x", "repeat-y", "no-repeat"]
-
-@typing.runtime_checkable
-class PyWebUIKitJsEvalable(typing.Protocol[_TV_PWUIKJEA]):
-    @abstractmethod
-    def __pywebuikit_jseval__(self) -> str: ...
     
 @typing.runtime_checkable
 class RenderItem(typing.Protocol[_TV_RENDERITEM]):
@@ -45,24 +32,15 @@ class Canvas2D_SaveState:
     def __enter__(self): self.ctx.save()
     def __exit__(self, *args): self.ctx.restore()
 
-class JavaScriptVariable:
-    def __init__(self, v: str): self.v = v
-    def __pywebuikit_jseval__(self) -> str: return self.v
-    
-class Path2D(JavaScriptVariable): ...
-class ImageData(JavaScriptVariable): ...
-class WebJsImage(JavaScriptVariable): ...
-class Element(JavaScriptVariable): ...
-
 class BaseRender:
-    def __init__(self, window: webwindow.WebWindow):
+    def __init__(self, window: webwindow.WebWindow, ctxname: str = "ctx"):
         self.window = window
-        self.ctxname = "ctx"
-        self.call_hooks: dict[str, typing.Callable[[tuple[evalable_type_aliases]], typing.Any]] = {}
+        self.ctx = jsbridge.CanvasRenderingContext2D(ctxname)
+        self.call_hooks: dict[str, typing.Callable[[tuple[jsbridge.pyobj_sifytype]], typing.Any]] = {}
     
-    def call_method(self, method: str, *args: tuple[evalable_type_aliases]):
+    def call_method(self, method: str, *args: tuple[jsbridge.pyobj_sifytype]):
         hook_do, hook_value = self.call_hooks[method](args) if method in self.call_hooks else (None, None)
-        code = f"{self.ctxname}.{method}({",".join(self.format_args(args))});"
+        code = f"{jsbridge.stringify_pyobj(self)}.{method}({jsbridge.iterable2jsarray(args, False)});"
         
         match hook_do:
             case None: ...
@@ -71,38 +49,18 @@ class BaseRender:
         
         return self.window.evaluate_js(code)
     
-    def format_args(self, args: evalable_type_aliases):
-        for arg in args:
-            if isinstance(arg, PyWebUIKitJsEvalable):
-                yield arg.__pywebuikit_jseval__()
-            elif isinstance(arg, str):
-                yield webwindow.StringProcesser.replaceString2CodeEval(arg)
-            elif isinstance(arg, int):
-                yield str(arg)
-            elif isinstance(arg, float):
-                yield str(arg)
-            elif isinstance(arg, bool):
-                yield str(arg).lower()
-            elif isinstance(arg, dict):
-                yield f"{"{"}{",".join(f"{webwindow.StringProcesser.replaceString2CodeEval(key)}:{self.format_args(value)}" for key, value in arg.items())}{"}"}"
-            elif isinstance(arg, type(None)):
-                yield "null"
-            elif isinstance(arg, BaseRender):
-                yield arg.ctxname
-            elif hasattr(arg, "__iter__"):
-                yield f"[{",".join(self.format_args(arg))}]"
-            else:
-                raise TypeError(f"Unsupported type {type(arg)}")
-
+    def __pywebuikit_jseval__(self):
+        return self.ctx.__pywebuikit_jseval__()
+    
 class Context2DRender(BaseRender):
     def create_mainCanvas(self):
         return self.window.evaluate_js(jscodes.create_2DCanvas)
     
-    def setAttribute(self, name: str, value: evalable_type_aliases):
-        return self.window.evaluate_js(f"{self.ctxname}.{name} = ({next(iter(self.format_args([value])))});")
+    def setAttribute(self, name: str, value: jsbridge.pyobj_sifytype):
+        return self.window.evaluate_js(f"{jsbridge.stringify_pyobj(self)}.{name} = ({jsbridge.stringify_pyobj(value)});")
     
     def getAttribute(self, name: str):
-        return self.window.evaluate_js(f"{self.ctxname}.{name};")
+        return self.window.evaluate_js(f"{jsbridge.stringify_pyobj(self)}.{name};")
     
     @overload
     def arc(self, x: numtype, y: numtype, radius: numtype, startAngle: numtype, endAngle: numtype):
@@ -129,7 +87,7 @@ class Context2DRender(BaseRender):
         return self.call_method("clip")
     
     @overload
-    def clip(self, path: Path2D):
+    def clip(self, path: jsbridge.Path2D):
         return self.call_method("clip", path)
     
     @overload
@@ -137,7 +95,7 @@ class Context2DRender(BaseRender):
         return self.call_method("clip", fillRule)
 
     @overload
-    def clip(self, path: Path2D, fillRule: fillRuleType):
+    def clip(self, path: jsbridge.Path2D, fillRule: fillRuleType):
         return self.call_method("clip", path, fillRule)
     
     @overload
@@ -152,40 +110,40 @@ class Context2DRender(BaseRender):
         return self.call_method("createImageData", width, height)
 
     @overload
-    def createImageData(self, width: numtype, height: numtype, setting: PyWebUIKitJsEvalable):
+    def createImageData(self, width: numtype, height: numtype, setting: jsbridge.PyWebUIKitJsEvalable):
         return self.call_method("createImageData", width, height, setting)
     
     @overload
-    def createImageData(self, imagedata: ImageData):
+    def createImageData(self, imagedata: jsbridge.ImageData):
         return self.call_method("createImageData", imagedata)
     
     def createLinearGradient(self, x0: numtype, y0: numtype, x1: numtype, y1: numtype):
         return self.call_method("createLinearGradient", x0, y0, x1, y1)
     
-    def createPattern(self, image: WebJsImage, repetition: repetitionType):
+    def createPattern(self, image: jsbridge.Image, repetition: repetitionType):
         return self.call_method("createPattern", image, repetition)
     
     def createRadialGradient(self, x0: numtype, y0: numtype, r0: numtype, x1: numtype, y1: numtype, r1: numtype):
         return self.call_method("createRadialGradient", x0, y0, r0, x1, y1, r1)
     
     @overload
-    def drawFocusIfNeeded(self, element: Element):
+    def drawFocusIfNeeded(self, element: jsbridge.Element):
         return self.call_method("drawFocusIfNeeded", element)
     
     @overload
-    def drawFocusIfNeeded(self, element: Element, path: Path2D):
+    def drawFocusIfNeeded(self, element: jsbridge.Element, path: jsbridge.Path2D):
         return self.call_method("drawFocusIfNeeded", element, path)
     
     @overload
-    def drawImage(self, image: WebJsImage, dx: numtype, dy: numtype):
+    def drawImage(self, image: jsbridge.Image, dx: numtype, dy: numtype):
         return self.call_method("drawImage", image, dx, dy)
 
     @overload
-    def drawImage(self, image: WebJsImage, dx: numtype, dy: numtype, dWidth: numtype, dHeight: numtype):
+    def drawImage(self, image: jsbridge.Image, dx: numtype, dy: numtype, dWidth: numtype, dHeight: numtype):
         return self.call_method("drawImage", image, dx, dy, dWidth, dHeight)
     
     @overload
-    def drawImage(self, image: WebJsImage, sx: numtype, sy: numtype, sWidth: numtype, sHeight: numtype, dx: numtype, dy: numtype, dWidth: numtype, dHeight: numtype):
+    def drawImage(self, image: jsbridge.Image, sx: numtype, sy: numtype, sWidth: numtype, sHeight: numtype, dx: numtype, dy: numtype, dWidth: numtype, dHeight: numtype):
         return self.call_method("drawImage", image, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight)
     
     def ellipse(self, x: numtype, y: numtype, radiusX: numtype, radiusY: numtype, rotation: numtype, startAngle: numtype, endAngle: numtype, counterclockwise: bool = False):
@@ -196,7 +154,7 @@ class Context2DRender(BaseRender):
         return self.call_method("fill")
 
     @overload
-    def fill(self, path: Path2D):
+    def fill(self, path: jsbridge.Path2D):
         return self.call_method("fill", path)
     
     @overload
@@ -204,7 +162,7 @@ class Context2DRender(BaseRender):
         return self.call_method("fill", fillRule)
     
     @overload
-    def fill(self, path: Path2D, fillRule: fillRuleType):
+    def fill(self, path: jsbridge.Path2D, fillRule: fillRuleType):
         return self.call_method("fill", path, fillRule)
     
     def fillRect(self, x: numtype, y: numtype, width: numtype, height: numtype):
@@ -226,7 +184,7 @@ class Context2DRender(BaseRender):
         return self.call_method("getImageData", sx, sy, sw, sh)
     
     @overload
-    def getImageData(self, sx: numtype, sy: numtype, sw: numtype, sh: numtype, settings: PyWebUIKitJsEvalable):
+    def getImageData(self, sx: numtype, sy: numtype, sw: numtype, sh: numtype, settings: jsbridge.PyWebUIKitJsEvalable):
         return self.call_method("getImageData", sx, sy, sw, sh, settings)
     
     def getLineDash(self):
@@ -247,11 +205,11 @@ class Context2DRender(BaseRender):
         return self.call_method("isPointInPath", x, y, fillRule)
 
     @overload
-    def isPointInPath(self, path: Path2D, x: numtype, y: numtype):
+    def isPointInPath(self, path: jsbridge.Path2D, x: numtype, y: numtype):
         return self.call_method("isPointInPath", path, x, y)
 
     @overload
-    def isPointInPath(self, path: Path2D, x: numtype, y: numtype, fillRule: fillRuleType):
+    def isPointInPath(self, path: jsbridge.Path2D, x: numtype, y: numtype, fillRule: fillRuleType):
         return self.call_method("isPointInPath", path, x, y, fillRule)
     
     @overload
@@ -259,7 +217,7 @@ class Context2DRender(BaseRender):
         return self.call_method("isPointInStroke", x, y)
 
     @overload
-    def isPointInStroke(self, path: Path2D, x: numtype, y: numtype):
+    def isPointInStroke(self, path: jsbridge.Path2D, x: numtype, y: numtype):
         return self.call_method("isPointInStroke", path, x, y)
     
     def lineTo(self, x: numtype, y: numtype):
@@ -272,11 +230,11 @@ class Context2DRender(BaseRender):
         return self.call_method("moveTo", x, y)
     
     @overload
-    def putImageData(self, imageData: ImageData, dx: numtype, dy: numtype):
+    def putImageData(self, imageData: jsbridge.ImageData, dx: numtype, dy: numtype):
         return self.call_method("putImageData", imageData, dx, dy)
 
     @overload
-    def putImageData(self, imageData: ImageData, dx: numtype, dy: numtype, dirtyX: numtype, dirtyY: numtype, dirtyWidth: numtype, dirtyHeight: numtype):
+    def putImageData(self, imageData: jsbridge.ImageData, dx: numtype, dy: numtype, dirtyX: numtype, dirtyY: numtype, dirtyWidth: numtype, dirtyHeight: numtype):
         return self.call_method("putImageData", imageData, dx, dy, dirtyX, dirtyY, dirtyWidth, dirtyHeight)
     
     def quadraticCurveTo(self, cpx: numtype, cpy: numtype, x: numtype, y: numtype):
@@ -322,7 +280,7 @@ class Context2DRender(BaseRender):
         return self.call_method("stroke")
 
     @overload
-    def stroke(self, path: Path2D):
+    def stroke(self, path: jsbridge.Path2D):
         return self.call_method("stroke", path)
     
     @overload
@@ -360,7 +318,11 @@ class Context2DRender_Extended(Context2DRender):
         )
     
     def clear(self):
-        return self.clearRect(0, 0, JavaScriptVariable(f"{self.ctxname}.canvas.width"), JavaScriptVariable(f"{self.ctxname}.canvas.height"))
+        return self.clearRect(
+            0, 0,
+            jsbridge.JavaScriptVariable(f"{jsbridge.stringify_pyobj(self)}.canvas.width"),
+            jsbridge.JavaScriptVariable(f"{jsbridge.stringify_pyobj(self)}.canvas.height")
+        )
     
     def rotateByDegrees(self, deg: numtype):
         return self.rotate(deg * math.pi / 180)
@@ -374,10 +336,10 @@ class Context2DRender_Extended(Context2DRender):
             self.lineTo(x2, y2)
             self.stroke()
     
-    def drawImageCenter(self, image: WebJsImage, x: numtype, y: numtype, width: numtype, height: numtype):
+    def drawImageCenter(self, image: jsbridge.Image, x: numtype, y: numtype, width: numtype, height: numtype):
         return self.drawImage(image, x - width / 2, y - height / 2, width, height)
     
-    def drawRotateImageCenter(self, image: WebJsImage, x: numtype, y: numtype, width: numtype, height: numtype, deg: numtype):
+    def drawRotateImageCenter(self, image: jsbridge.Image, x: numtype, y: numtype, width: numtype, height: numtype, deg: numtype):
         with self.savestate:
             if deg != 0.0:
                 self.translate(x, y)
@@ -386,7 +348,7 @@ class Context2DRender_Extended(Context2DRender):
             
             return self.drawImage(image, x - width / 2, y - height / 2, width, height)
     
-    def drawAlphaImage(self, image: WebJsImage, x: numtype, y: numtype, width: numtype, height: numtype, alpha: numtype):
+    def drawAlphaImage(self, image: jsbridge.Image, x: numtype, y: numtype, width: numtype, height: numtype, alpha: numtype):
         with self.savestate:
             self.setAttribute("globalAlpha", alpha)
             return self.drawImage(image, x, y, width, height)
@@ -514,7 +476,7 @@ class Canvas2DRenderManager:
         self.items: list[RenderItem] = [] if items is None else items.copy()
         self.renderMethods: dict[str, typing.Callable[[numtype, RenderItem], typing.Any]] = {}
     
-    def doRender(self):
+    def render(self):
         t = self.timer.now()
         
         for item in self.items:
@@ -527,15 +489,3 @@ class Canvas2DRenderManager:
                 self.renderMethods[itype](t, item)
             else:
                 raise ValueError(f"Unknown render item type: {itype}")
-
-evalable_type_aliases = (
-    str
-    | int
-    | float
-    | bool
-    | dict
-    | None
-    | BaseRender
-    | typing.Iterable
-    | PyWebUIKitJsEvalable
-)

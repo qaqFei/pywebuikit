@@ -15,7 +15,7 @@ def main():
     six, siy = w / 4, h / 4
     sr, sg, sb = 1, 2, 3
     
-    while not cv._destroy_event.isSet():
+    while not cv._destroy_event.is_set():
         cv.setWaitingState(True)
         
         rd.clearRect(0, 0, w, h)
