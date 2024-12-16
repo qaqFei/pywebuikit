@@ -37,7 +37,7 @@ def main():
             b = 255 if b > 255 else 0
             sb *= -1
         
-        rect.fillColor = public_objects.Color(r, g, b)
+        rect.fillColor = public_objects.Color(f"rgba({r}, {g}, {b}, {(r + g + b) / 765})")
         rect.x += sx
         rect.y += sy
         
