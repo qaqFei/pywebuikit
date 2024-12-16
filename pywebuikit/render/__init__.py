@@ -3,6 +3,7 @@ from __future__ import annotations
 import typing
 import math
 import time
+import random
 from abc import abstractmethod
 
 from .. import webwindow
@@ -32,9 +33,9 @@ class Canvas2D_SaveState:
     def __exit__(self, *args): self.ctx.restore()
 
 class BaseRender:
-    def __init__(self, window: webwindow.WebWindow, ctxname: str = "ctx"):
+    def __init__(self, window: webwindow.WebWindow, ctx: str|jsbridge.CanvasRenderingContext2D = "ctx"):
         self.window = window
-        self.ctx = jsbridge.CanvasRenderingContext2D(ctxname)
+        self.ctx = jsbridge.CanvasRenderingContext2D(ctx) if isinstance(ctx, str) else ctx
         self.call_hooks: dict[str, typing.Callable[[tuple[jsbridge.pyobj_sifytype]], typing.Any]] = {}
     
     def call_method(self, method: str, *args: tuple[jsbridge.pyobj_sifytype]):
@@ -48,8 +49,13 @@ class BaseRender:
         
         return self.window.evaluate_js(code)
     
+    def create_canvasRef(self):
+        vn = f"cvref__{random.randint(0, 2 << 31)}"
+        self.window.evaluate_js(f"{vn} = {jsbridge.stringify_pyobj(self)}.canvas;")
+        return jsbridge.Element(vn)
+    
     def __pywebuikit_jseval__(self):
-        return self.ctx.__pywebuikit_jseval__()
+        return jsbridge.stringify_pyobj(self.ctx)
     
 class Context2DRender(BaseRender, metaclass=OverloadMeta):
     def create_mainCanvas(self):
