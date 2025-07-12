@@ -57,6 +57,9 @@ def main():
         elif not (0 < rect.y < h and 0 < rect.y + siy < h):
             rect.y = h - siy if rect.y > 0 else 0
             sy *= -1
+            sy = -25
+        
+        sy += 1
         
         wfilter_blur.setvalue((rect.x + rect.y) / 75)
         wfilter_gray.setvalue((r + g + b) / 765 * 1.25)
